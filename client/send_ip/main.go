@@ -108,7 +108,8 @@ func listenSend() {
 		SrcPort: layers.TCPPort(9998),
 		DstPort: layers.TCPPort(9999),
 		SYN:     true,
-		Seq:     seq,
+		Seq:     1005,
+		//FIN:     true,
 	}
 	err1 := tcpLayer.SetNetworkLayerForChecksum(&ipLayer)
 	if err1 != nil {
@@ -151,12 +152,49 @@ func listenSend() {
 	if err != nil {
 		log.Fatalf("listen packet err:%v", err)
 	}
-
 	raw, err := ipv4.NewRawConn(ipConn)
 	if err != nil {
 		log.Fatalf("NewRawConn err:%v", err)
 	}
 
+	go func(rawConn *ipv4.RawConn) {
+		for {
+			buf := make([]byte, 4094)
+
+			// 这个读取到的是IP上层 的报文,
+			// func (c *IPConn) ReadFromIP(b []byte) (int, *IPAddr, error) {
+			// func (c *packetHandler) ReadFrom(b []byte) (h *Header, p []byte, cm *ControlMessage, err error) {
+			// 原始报文
+			// func (c *conn) Read(b []byte) (int, error) {
+			h, payload, _, err := rawConn.ReadFrom(buf)
+			if len(payload) < 0 || err != nil {
+				log.Errorf("read raw conn from [%s] fail, err:%v", h.Src.String(), err)
+				return
+			}
+			if h.Src.String() != "127.0.0.1" {
+				continue
+			}
+
+			log.Infof("addr src:%v, dst:%v", h.Src, h.Dst)
+			log.Infof("p:%v", payload)
+			p := gopacket.NewPacket(payload, layers.LayerTypeTCP, gopacket.Default)
+			if p.ErrorLayer() != nil {
+				log.Fatal("Failed to decode LinkTypeRaw packet:", p.ErrorLayer().Error())
+			}
+
+			// checkLayers(p, []gopacket.LayerType{LayerTypeIPv6, LayerTypeIPv6Destination, LayerTypeUDP}, t)
+			var tcp *layers.TCP
+			if l, ok := p.Layer(layers.LayerTypeTCP).(*layers.TCP); !ok {
+				log.Fatal("No UDP layer type found in packet")
+			} else {
+				tcp = l
+			}
+
+			log.Infof("收到TCP报文:%+v", tcp)
+		}
+	}(raw)
+
+	time.Sleep(time.Second * 1)
 	n, err := raw.WriteToIP(buf.Bytes(), &dstIPaddr)
 	if n < len(buf.Bytes()) {
 		log.Fatalf("write expect:%v, actual:%v, err:%v", len(buf.Bytes()), n, err)
@@ -167,7 +205,7 @@ func listenSend() {
 	log.Infof("ip checksum:%v %x", ipLayer.Checksum, ipLayer.Checksum)
 	log.Infof("tcp checksum:%v %x", tcpLayer.Checksum, tcpLayer.Checksum)
 	log.Infof("send buf:%v", buf.Bytes())
-	time.Sleep(time.Second * 1)
+	select {}
 }
 
 func SerilizeToUdp() {
